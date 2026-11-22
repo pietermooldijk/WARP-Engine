@@ -1,6 +1,6 @@
 # Gamet Studios WARP Engine
 
-> **WARP** — **W**eb **A**pplication **R**untime **P**latform (`v2.1.0`)
+> **WARP** — **W**eb **A**pplication **R**untime **P**latform (`v2.2.0`)
 
 Die modulare **Full-Stack Web-App-Engine** von Gamet Studios — entwickelt mit **PHP 8.1–8.5**, **Vanilla-JS (ES-Module)** und einem geschützten **SQLite Vault**.  
 Kein Build-Server, kein Node.js-Zwang im Hosting, kein Composer-Ballast und kein MySQL erforderlich.
@@ -10,11 +10,12 @@ Kein Build-Server, kein Node.js-Zwang im Hosting, kein Composer-Ballast und kein
 ## Highlights
 
 - **Zero-Build & Hosting-Ready:** Läuft direkt auf klassischem Shared-Hosting (Plesk, Apache, nginx) sowie lokal über den eingebauten PHP-Server.
-- **SQLite Vault & Queryable App-Store:** Schema-freier Collection-Store (`app_records`) mit Suche, Filtern, Sortierung, Pagination, Patch-Updates & Bulk-Import.
+- **SQLite Vault & Queryable App-Store:** Schema-freier Collection-Store (`app_records`) mit Suche, Filtern, Sortierung, Pagination, Patch-Updates, Bulk-Import sowie JSON-/CSV-Export.
 - **Auth, RBAC & API-Tokens:** Session-Auth, OpenID Connect (OIDC/PKCE), Rollenmodell (`admin`/`editor`), Scoped Bearer API-Tokens (`api_tokens`), CSRF-Schutz & Rate-Limiter.
-- **Eingebaute Infrastruktur:** TTL-Cache (`app_cache`), Background-Job-Queue (`app_jobs`), AES-256-GCM Verschlüsselung, HMAC-Signatur, cURL HTTP-Client, signierte Webhooks, Audit-Log & Health-Check.
+- **Eingebaute Infrastruktur:** TTL-Cache (`app_cache`), Background-Job-Queue (`app_jobs`), Feature-Flags & App-Settings, Server-Sent Events (SSE), AES-256-GCM Verschlüsselung, HMAC-Signatur, cURL HTTP-Client, signierte Webhooks (Senden & Verifizieren), Audit-Log & Health-Check.
 - **Upload- & Medien-Pipeline:** Sichere Datei-Uploads mit MIME-Prüfung und automatischer WebP-Konvertierung & Skalierung.
-- **Zero-Dependency Frontend SDK (`engine.js`):** Reaktiver State-Store, Hash-SPA-Router, Pub/Sub Event-Bus, Hotkeys sowie UI-Komponenten (Toast, Modal, Confirm, sortierbare Tabelle & Formular-Builder).
+- **Zero-Dependency Frontend SDK (`engine.js`):** Reaktiver State-Store, Hash-SPA-Router, Pub/Sub Event-Bus, SSE-Client, Hotkeys sowie UI-Komponenten (Command Palette `Cmd+K`, Drag-&-Drop Dropzone, Toast, Modal, Confirm, sortierbare Tabelle & Formular-Builder).
+- **WARP CLI (`tools/warp.php`):** App-Generator (`new-app`), Cron-Runner (`jobs:run`), Cache-Wartung, Feature-Flags & Health-Check direkt im Terminal.
 
 ---
 
@@ -40,7 +41,8 @@ Kein Build-Server, kein Node.js-Zwang im Hosting, kein Composer-Ballast und kein
 │   └── example-notes/     # Starter-Beispiel-App (UI + eigenes API-Modul)
 ├── storage/               # Geschütztes Verzeichnis für die SQLite-Datenbank
 └── tools/
-    └── router.php         # Lokaler Dev-Router (inkl. Sicherheitsregeln)
+    ├── router.php         # Lokaler Dev-Router (inkl. Sicherheitsregeln)
+    └── warp.php           # WARP CLI (App-Generator, Jobs, Flags, Health)
 ```
 
 ---
@@ -56,7 +58,11 @@ Danach im Browser die Beispiel-App öffnen:
 
 ### Eigene App anlegen
 
-1. Ordner unter `apps/<mein-slug>/` mit `manifest.json`, `index.html` und optional `api.php` erstellen.
+```bash
+php tools/warp.php new-app mein-projekt "Mein Projekt"
+```
+
+1. Erstellt automatisch `apps/mein-projekt/` mit `manifest.json`, `index.html` und `api.php`.
 2. Backend-Aktionen stehen automatisch unter `/api/app.php?app=<mein-slug>&action=...` bereit.
 3. Im Frontend einfach das SDK importieren:
 

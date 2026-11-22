@@ -1,5 +1,5 @@
 /**
- * Gamet Studios WARP Engine v2.1 — Frontend App-Framework SDK
+ * Gamet Studios WARP Engine v2.2 — Frontend App-Framework SDK
  * (Web Application Runtime Platform)
  *
  * Zero-Dependency ES-Modul für komplette Web-Apps auf Basis der Gamet Studios WARP Engine:
@@ -140,8 +140,38 @@ export const store = {
   patch: (ns, key, patch) => api('store_patch', { ns, key, patch }, { method: 'POST' }),
   count: (ns, where = null) => api('store_count', where ? { ns, where } : { ns }, { method: 'GET' }),
   namespaces: () => api('store_namespaces', null, { method: 'GET' }),
+  export: (ns) => api('store_export', { ns }, { method: 'GET' }),
+  import: (ns, items) => api('store_import', { ns, items }, { method: 'POST' }),
   remove: (ns, key) => api('store_delete', { ns, key }, { method: 'POST' }),
 };
+
+export const flags = {
+  list: () => api('flags_list', null, { method: 'GET' }),
+  set: (name, enabled) => api('flag_set', { name, enabled: Boolean(enabled) }, { method: 'POST' }),
+};
+
+export const appSettings = {
+  get: (appSlug) => api('app_settings_get', { appSlug }, { method: 'GET' }),
+  set: (appSlug, key, value) => api('app_setting_set', { appSlug, key, value }, { method: 'POST' }),
+};
+
+export function sse(url, handlers = {}) {
+  const es = new EventSource(url);
+  const parse = (raw) => {
+    try { return JSON.parse(raw); } catch { return raw; }
+  };
+  for (const [ev, fn] of Object.entries(handlers)) {
+    if (typeof fn !== 'function') continue;
+    if (ev === 'open') es.addEventListener('open', fn);
+    else if (ev === 'error') es.addEventListener('error', fn);
+    else if (ev === 'message') es.addEventListener('message', (e) => fn(parse(e.data), e));
+    else es.addEventListener(ev, (e) => fn(parse(e.data), e));
+  }
+  return {
+    source: es,
+    close: () => es.close(),
+  };
+}
 
 export const uploads = {
   list: (ns = '', limit = 100) => api('uploads_list', ns ? { ns, limit } : { limit }, { method: 'GET' }),
@@ -404,9 +434,115 @@ export function renderForm(container, { fields = [], submitLabel = 'Speichern', 
   return form;
 }
 
-export const ui = { toast, modal, confirm: confirmDialog, table: renderTable, form: renderForm };
+export function commandPalette(commands = [], { shortcut = 'mod+k', placeholder = 'Befehl suchen…' } = {}) {
+  let activeModal = null;
+  const open = () => {
+    if (activeModal) return;
+    let selectedIdx = 0;
+    let filtered = [...commands];
+    activeModal = modal({
+      title: 'Command Palette',
+      width: '540px',
+      bodyHtml: `
+        <input type="search" data-pal-input placeholder="${esc(placeholder)}" autocomplete="off"
+          style="width:100%; padding:0.65rem 0.85rem; border-radius:10px; border:1px solid rgba(255,255,255,0.18); background:#18181b; color:#f4f4f5; font-size:14px; box-sizing:border-box; margin-bottom:0.65rem;">
+        <div data-pal-list style="max-height:300px; overflow-y:auto; display:flex; flex-direction:column; gap:0.25rem;"></div>
+      `,
+      onMount(body, close) {
+        const input = body.querySelector('[data-pal-input]');
+        const list = body.querySelector('[data-pal-list]');
+        const origClose = close;
+        const closePalette = () => { activeModal = null; origClose(); };
+
+        const run = (cmd) => {
+          closePalette();
+          if (cmd && typeof cmd.run === 'function') cmd.run();
+        };
+
+        const render = () => {
+          if (!filtered.length) {
+            list.innerHTML = '<div style="padding:0.75rem; color:#71717a; font-size:13px;">Keine passenden Befehle.</div>';
+            return;
+          }
+          list.innerHTML = filtered.map((c, i) => `
+            <button type="button" data-idx="${i}" style="text-align:left; width:100%; padding:0.6rem 0.75rem; border-radius:8px; border:none; cursor:pointer; display:flex; justify-content:space-between; align-items:center; background:${i === selectedIdx ? 'rgba(255,255,255,0.12)' : 'transparent'}; color:#f4f4f5; font-size:14px;">
+              <span>${esc(c.label || '')}${c.hint ? ` <small style="color:#a1a1aa; margin-left:0.4rem;">${esc(c.hint)}</small>` : ''}</span>
+              ${c.shortcut ? `<kbd style="font-size:11px; color:#a1a1aa; border:1px solid rgba(255,255,255,0.16); border-radius:4px; padding:0.1rem 0.35rem;">${esc(c.shortcut)}</kbd>` : ''}
+            </button>
+          `).join('');
+          list.querySelectorAll('button[data-idx]').forEach((btn) => {
+            btn.addEventListener('click', () => run(filtered[Number(btn.dataset.idx)]));
+          });
+        };
+
+        input.addEventListener('input', () => {
+          const q = input.value.trim().toLowerCase();
+          filtered = commands.filter((c) => `${c.label || ''} ${c.hint || ''} ${(c.keywords || []).join(' ')}`.toLowerCase().includes(q));
+          selectedIdx = 0;
+          render();
+        });
+        input.addEventListener('keydown', (e) => {
+          if (e.key === 'Escape') { e.preventDefault(); closePalette(); }
+          else if (e.key === 'ArrowDown') { e.preventDefault(); selectedIdx = Math.min(filtered.length - 1, selectedIdx + 1); render(); }
+          else if (e.key === 'ArrowUp') { e.preventDefault(); selectedIdx = Math.max(0, selectedIdx - 1); render(); }
+          else if (e.key === 'Enter' && filtered[selectedIdx]) { e.preventDefault(); run(filtered[selectedIdx]); }
+        });
+        render();
+        input.focus();
+      },
+    });
+  };
+  const unbind = shortcut ? hotkey(shortcut, open) : () => {};
+  return { open, destroy: unbind };
+}
+
+export function dropzone(container, { ns = 'general', accept = '', multiple = true, label = 'Dateien hierher ziehen oder klicken', onUpload = null, onError = null } = {}) {
+  const el = typeof container === 'string' ? document.querySelector(container) : container;
+  if (!el) return null;
+  el.innerHTML = `
+    <div data-gs-dz style="border:2px dashed rgba(255,255,255,0.22); border-radius:12px; padding:1.5rem; text-align:center; cursor:pointer; transition:border-color 150ms, background 150ms;">
+      <div data-gs-dz-label style="font-size:14px; color:#d4d4d8;">${esc(label)}</div>
+      <input type="file" data-gs-dz-input style="display:none;" ${accept ? `accept="${esc(accept)}"` : ''} ${multiple ? 'multiple' : ''}>
+    </div>
+  `;
+  const box = el.querySelector('[data-gs-dz]');
+  const lbl = el.querySelector('[data-gs-dz-label]');
+  const inp = el.querySelector('[data-gs-dz-input]');
+
+  const handleFiles = async (fileList) => {
+    const files = Array.from(fileList || []);
+    if (!files.length) return;
+    const origText = lbl.textContent;
+    for (let i = 0; i < files.length; i++) {
+      lbl.textContent = `Lade hoch (${i + 1}/${files.length}): ${files[i].name}…`;
+      try {
+        const res = await upload(files[i], ns);
+        if (typeof onUpload === 'function') onUpload(res, files[i]);
+      } catch (err) {
+        if (typeof onError === 'function') onError(err, files[i]);
+        else toast(err.message || 'Upload fehlgeschlagen', 'error');
+      }
+    }
+    lbl.textContent = origText;
+    inp.value = '';
+  };
+
+  box.addEventListener('click', () => inp.click());
+  inp.addEventListener('change', () => handleFiles(inp.files));
+  box.addEventListener('dragover', (e) => { e.preventDefault(); box.style.borderColor = '#38bdf8'; box.style.background = 'rgba(56,189,248,0.08)'; });
+  box.addEventListener('dragleave', () => { box.style.borderColor = 'rgba(255,255,255,0.22)'; box.style.background = 'transparent'; });
+  box.addEventListener('drop', (e) => {
+    e.preventDefault();
+    box.style.borderColor = 'rgba(255,255,255,0.22)';
+    box.style.background = 'transparent';
+    handleFiles(e.dataTransfer?.files);
+  });
+  return { el: box };
+}
+
+export const ui = { toast, modal, confirm: confirmDialog, table: renderTable, form: renderForm, palette: commandPalette, dropzone };
 export const gsEngine = {
-  api, auth, store, tokens, upload, uploads,
+  api, auth, store, tokens, upload, uploads, flags, appSettings, sse,
   createStore, createRouter, createEvents, ui, toast, hotkey, debounce, throttle, copyText, fmtDate, esc,
 };
 export const warp = gsEngine;

@@ -28,7 +28,7 @@ require_once __DIR__ . '/telemetry.php';
 
 define('GS_ENGINE_NAME', 'Gamet Studios WARP Engine');
 define('GS_ENGINE_CODENAME', 'WARP');
-define('GS_ENGINE_VERSION', '2.1.0');
+define('GS_ENGINE_VERSION', '2.2.0');
 
 // ============================================================================
 // 1. HTTP Request / Response & Boot
@@ -663,6 +663,75 @@ function gs_store_namespaces(): array
     return $out;
 }
 
+function gs_store_export(string $ns): array
+{
+    $ns = gs_sanitize_ns($ns);
+    $res = gs_store_query($ns, ['perPage' => 500, 'page' => 1]);
+    $items = $res['items'];
+    for ($p = 2; $p <= $res['pages']; $p++) {
+        $next = gs_store_query($ns, ['perPage' => 500, 'page' => $p]);
+        $items = array_merge($items, $next['items']);
+    }
+    return [
+        'namespace'  => $ns,
+        'exportedAt' => date('c'),
+        'count'      => count($items),
+        'items'      => $items,
+    ];
+}
+
+function gs_store_import(string $ns, array $items, ?int $ownerId = null): int
+{
+    if (isset($items['items']) && is_array($items['items'])) {
+        $items = $items['items'];
+    }
+    return gs_store_bulk_put($ns, $items, $ownerId);
+}
+
+function gs_csv_download(string $filename, array $rows, array $columns = []): never
+{
+    $safeName = preg_replace('/[^a-z0-9_.-]+/i', '_', $filename) ?: 'export.csv';
+    if (!str_ends_with(strtolower($safeName), '.csv')) {
+        $safeName .= '.csv';
+    }
+    header('Content-Type: text/csv; charset=utf-8');
+    header('Content-Disposition: attachment; filename="' . $safeName . '"');
+    header('Cache-Control: no-store, no-cache, must-revalidate');
+
+    $out = fopen('php://output', 'w');
+    if ($out === false) {
+        exit;
+    }
+    fwrite($out, "\xEF\xBB\xBF");
+
+    if ($columns === [] && isset($rows[0]) && is_array($rows[0])) {
+        $columns = array_keys($rows[0]);
+    }
+    if ($columns !== []) {
+        fputcsv($out, $columns, ';');
+    }
+    foreach ($rows as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $line = [];
+        foreach ($columns as $col) {
+            $val = $row[$col] ?? '';
+            if (is_array($val) || is_object($val)) {
+                $val = json_encode($val, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            }
+            $str = (string) $val;
+            if ($str !== '' && in_array($str[0], ['=', '+', '-', '@', "\t", "\r"], true)) {
+                $str = "'" . $str;
+            }
+            $line[] = $str;
+        }
+        fputcsv($out, $line, ';');
+    }
+    fclose($out);
+    exit;
+}
+
 // ============================================================================
 // 5. TTL Cache (`app_cache`)
 // ============================================================================
@@ -923,6 +992,23 @@ function gs_webhook_send(string $url, array $payload, ?string $secret = null): a
     return gs_http('POST', $url, ['body' => $json, 'headers' => $headers]);
 }
 
+function gs_webhook_verify(string $secret, ?string $rawBody = null, ?string $signatureHeader = null): bool
+{
+    if ($secret === '') {
+        return false;
+    }
+    $body = $rawBody ?? (string) file_get_contents('php://input');
+    $sig = trim((string) ($signatureHeader ?? ($_SERVER['HTTP_X_GS_SIGNATURE'] ?? ($_SERVER['HTTP_X_HUB_SIGNATURE_256'] ?? ''))));
+    if ($sig === '') {
+        return false;
+    }
+    if (str_starts_with($sig, 'sha256=')) {
+        $sig = substr($sig, 7);
+    }
+    $expected = hash_hmac('sha256', $body, $secret);
+    return hash_equals($expected, $sig);
+}
+
 function gs_mail(string $to, string $subject, string $htmlBody, array $opts = []): bool
 {
     $from = (string) ($opts['from'] ?? ('no-reply@' . ($_SERVER['HTTP_HOST'] ?? 'localhost')));
@@ -1162,4 +1248,100 @@ function gs_list_apps(): array
         ];
     }
     return $items;
+}
+
+// ============================================================================
+// 10. Server-Sent Events (SSE), App-Settings & Feature-Flags
+// ============================================================================
+
+function gs_sse_headers(): void
+{
+    if (function_exists('session_status') && session_status() === PHP_SESSION_ACTIVE) {
+        session_write_close();
+    }
+    header('Content-Type: text/event-stream; charset=utf-8');
+    header('Cache-Control: no-cache, no-store, must-revalidate');
+    header('Connection: keep-alive');
+    header('X-Accel-Buffering: no');
+    while (ob_get_level() > 0) {
+        @ob_end_flush();
+    }
+    @flush();
+}
+
+function gs_sse_send(string $event, mixed $data, ?string $id = null): void
+{
+    if ($id !== null && $id !== '') {
+        echo 'id: ' . str_replace(["\r", "\n"], '', $id) . "\n";
+    }
+    echo 'event: ' . str_replace(["\r", "\n"], '', $event) . "\n";
+    $payload = is_string($data) ? $data : (string) json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    foreach (explode("\n", $payload) as $line) {
+        echo 'data: ' . $line . "\n";
+    }
+    echo "\n";
+    @flush();
+}
+
+function gs_app_setting_get(string $appSlug, string $key, mixed $default = null): mixed
+{
+    $slug = gs_sanitize_ns($appSlug);
+    $k = gs_sanitize_ns($key);
+    $raw = get_setting('app:' . $slug . ':' . $k, '__GS_UNSET__');
+    if ($raw === '__GS_UNSET__') {
+        return $default;
+    }
+    $decoded = json_decode($raw, true);
+    return json_last_error() === JSON_ERROR_NONE ? $decoded : $raw;
+}
+
+function gs_app_setting_set(string $appSlug, string $key, mixed $value): void
+{
+    $slug = gs_sanitize_ns($appSlug);
+    $k = gs_sanitize_ns($key);
+    set_setting('app:' . $slug . ':' . $k, (string) json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+}
+
+function gs_app_settings(string $appSlug): array
+{
+    $slug = gs_sanitize_ns($appSlug);
+    $prefix = 'app:' . $slug . ':';
+    $pdo = get_db();
+    $stmt = $pdo->prepare('SELECT key, value FROM settings WHERE key LIKE :p ORDER BY key ASC');
+    $stmt->execute([':p' => $prefix . '%']);
+    $out = [];
+    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $shortKey = substr((string) $r['key'], strlen($prefix));
+        $decoded = json_decode((string) $r['value'], true);
+        $out[$shortKey] = json_last_error() === JSON_ERROR_NONE ? $decoded : $r['value'];
+    }
+    return $out;
+}
+
+function gs_flag(string $name, bool $default = false): bool
+{
+    $k = 'flag:' . gs_sanitize_ns($name);
+    $raw = get_setting($k, '__GS_UNSET__');
+    if ($raw === '__GS_UNSET__') {
+        return $default;
+    }
+    return in_array(strtolower($raw), ['1', 'true', 'yes', 'on'], true);
+}
+
+function gs_flag_set(string $name, bool $enabled): void
+{
+    $k = 'flag:' . gs_sanitize_ns($name);
+    set_setting($k, $enabled ? '1' : '0');
+}
+
+function gs_flags_list(): array
+{
+    $pdo = get_db();
+    $rows = $pdo->query("SELECT key, value FROM settings WHERE key LIKE 'flag:%' ORDER BY key ASC")->fetchAll(PDO::FETCH_ASSOC);
+    $out = [];
+    foreach ($rows as $r) {
+        $name = substr((string) $r['key'], 5);
+        $out[$name] = in_array(strtolower((string) $r['value']), ['1', 'true', 'yes', 'on'], true);
+    }
+    return $out;
 }

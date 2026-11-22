@@ -1,6 +1,6 @@
 <?php
 /**
- * Gamet Studios WARP Engine v2.1 — Einheitlicher App-API-Router (/api/app.php)
+ * Gamet Studios WARP Engine v2.2 — Einheitlicher App-API-Router (/api/app.php)
  *
  * Bietet integrierte Engine-Endpunkte (Auth/Tokens, Query-Store, Uploads, Jobs, Audit)
  * sowie automatisches Routing für eigene App-Module unter /apps/<slug>/api.php.
@@ -160,6 +160,77 @@ if ($action === 'store_count') {
 if ($action === 'store_namespaces') {
     gs_require_perm('store');
     gs_json(['ok' => true, 'namespaces' => gs_store_namespaces()]);
+}
+
+if ($action === 'store_export') {
+    gs_require_perm('store');
+    $ns = (string) ($_GET['ns'] ?? '');
+    try {
+        gs_json(['ok' => true] + gs_store_export($ns));
+    } catch (Throwable $e) {
+        gs_json(['ok' => false, 'error' => $e->getMessage()], 400);
+    }
+}
+
+if ($action === 'store_import' && gs_method() === 'POST') {
+    $user = gs_require_perm('store');
+    gs_require_csrf();
+    $in = gs_input();
+    $ns = (string) ($in['ns'] ?? '');
+    $items = is_array($in['items'] ?? null) ? $in['items'] : [];
+    try {
+        $imported = gs_store_import($ns, $items, (int) ($user['id'] ?? 0));
+        gs_audit('store_import', $ns . ' (' . $imported . ' Einträge)', $user);
+        gs_json(['ok' => true, 'imported' => $imported]);
+    } catch (Throwable $e) {
+        gs_json(['ok' => false, 'error' => $e->getMessage()], 400);
+    }
+}
+
+// --- Feature-Flags & App-Settings ---
+
+if ($action === 'flags_list') {
+    gs_json(['ok' => true, 'flags' => gs_flags_list()]);
+}
+
+if ($action === 'flag_set' && gs_method() === 'POST') {
+    $user = gs_require_auth('admin');
+    gs_require_csrf();
+    $in = gs_input();
+    $name = (string) ($in['name'] ?? '');
+    $enabled = filter_var($in['enabled'] ?? false, FILTER_VALIDATE_BOOLEAN);
+    try {
+        gs_flag_set($name, $enabled);
+        gs_audit('flag_set', $name . '=' . ($enabled ? 'on' : 'off'), $user);
+        gs_json(['ok' => true, 'name' => $name, 'enabled' => $enabled]);
+    } catch (Throwable $e) {
+        gs_json(['ok' => false, 'error' => $e->getMessage()], 400);
+    }
+}
+
+if ($action === 'app_settings_get') {
+    gs_require_perm('store');
+    $slug = (string) ($_GET['appSlug'] ?? ($_GET['slug'] ?? ''));
+    try {
+        gs_json(['ok' => true, 'settings' => gs_app_settings($slug)]);
+    } catch (Throwable $e) {
+        gs_json(['ok' => false, 'error' => $e->getMessage()], 400);
+    }
+}
+
+if ($action === 'app_setting_set' && gs_method() === 'POST') {
+    $user = gs_require_auth('admin');
+    gs_require_csrf();
+    $in = gs_input();
+    $slug = (string) ($in['appSlug'] ?? ($in['slug'] ?? ''));
+    $key = (string) ($in['key'] ?? '');
+    try {
+        gs_app_setting_set($slug, $key, $in['value'] ?? null);
+        gs_audit('app_setting_set', $slug . '.' . $key, $user);
+        gs_json(['ok' => true, 'appSlug' => $slug, 'key' => $key]);
+    } catch (Throwable $e) {
+        gs_json(['ok' => false, 'error' => $e->getMessage()], 400);
+    }
 }
 
 // --- API Tokens ---
