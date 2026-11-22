@@ -60,6 +60,7 @@ Danach im Browser die Beispiel-App öffnen:
 
 ```bash
 php tools/warp.php new-app mein-projekt "Mein Projekt"
+php tools/warp.php health
 ```
 
 1. Erstellt automatisch `apps/mein-projekt/` mit `manifest.json`, `index.html` und `api.php`.
