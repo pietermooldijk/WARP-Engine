@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="de" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Beispiel-App — Gamet Studios WARP Engine</title>
+  <link rel="stylesheet" href="/assets/css/tokens.css" />
+  <link rel="stylesheet" href="/assets/css/reset.css" />
+  <link rel="stylesheet" href="/assets/css/base.css" />
+</head>
+<body style="padding:2rem; max-width:720px; margin:0 auto;">
+  <h1 style="font-size:1.5rem; margin-bottom:0.5rem;">Team-Notizen (Engine Starter-App)</h1>
+  <p id="status" style="opacity:0.75; margin-bottom:1.5rem;">Verbinde mit Gamet Studios WARP Engine…</p>
+
+  <form id="note-form" style="display:flex; gap:0.5rem; margin-bottom:1.25rem;">
+    <input id="note-input" type="text" placeholder="Neue Notiz speichern…" required style="flex:1; padding:0.6rem 0.8rem; border-radius:8px; border:1px solid rgba(255,255,255,0.18); background:rgba(255,255,255,0.05); color:inherit;" />
+    <button type="submit" class="btn btn--primary">Speichern</button>
+  </form>
+
+  <ul id="notes-list" style="display:flex; flex-direction:column; gap:0.5rem; list-style:none; padding:0;"></ul>
+
+  <script type="module">
+    import { gsEngine } from '/assets/js/core/engine.js';
+    const statusEl = document.getElementById('status');
+    const listEl = document.getElementById('notes-list');
+
+    async function load() {
+      const info = await gsEngine.auth();
+      if (!info.user) {
+        statusEl.innerHTML = 'Bitte zuerst über <a href="/cms">/cms</a> anmelden, um den geschützten App-Speicher zu nutzen.';
+        return;
+      }
+      statusEl.textContent = `Angemeldet als ${info.user.name} · Engine v${info.engine.version}`;
+      const res = await gsEngine.store.list('example-notes');
+      listEl.innerHTML = res.items.map((it) => `
+        <li style="display:flex; justify-content:space-between; align-items:center; padding:0.75rem 1rem; border-radius:10px; border:1px solid rgba(255,255,255,0.12);">
+          <span>${gsEngine.esc(it.data?.text || '')}</span>
+          <button data-del="${gsEngine.esc(it.key)}" class="btn btn--secondary btn--sm">Löschen</button>
+        </li>
+      `).join('');
+      listEl.querySelectorAll('[data-del]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          await gsEngine.store.remove('example-notes', btn.dataset.del);
+          load();
+        });
+      });
+    }
+
+    document.getElementById('note-form')?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const input = document.getElementById('note-input');
+      const text = input.value.trim();
+      if (!text) return;
+      await gsEngine.store.put('example-notes', 'note_' + Date.now(), { text });
+      input.value = '';
+      gsEngine.toast('Notiz gespeichert');
+      load();
+    });
+
+    load().catch((err) => { statusEl.textContent = err.message; });
+  </script>
+</body>
+</html>

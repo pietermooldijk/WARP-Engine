@@ -1,0 +1,5 @@
+{
+  "name": "Beispiel-App: Team-Notizen",
+  "version": "1.0.0",
+  "description": "Minimale Starter-App auf Basis der Gamet Studios WARP Engine (SQLite App-Store + Auth + Frontend SDK)."
+}
